@@ -24,8 +24,18 @@ if($ENV{ROS_DISTRO} STREQUAL "humble")
     set(RGL_LINUX_ZIP_FILENAME_BASE RGL-full-linux-x64-humble)
 elseif($ENV{ROS_DISTRO} STREQUAL "jazzy")
     set(RGL_LINUX_ZIP_FILENAME_BASE RGL-full-linux-x64-jazzy)
+elseif($ENV{ROS_DISTRO} STREQUAL "kilted") # there is no release for kilted but jazzy one works properly
+    set(RGL_LINUX_ZIP_FILENAME_BASE RGL-full-linux-x64-jazzy)
+elseif($ENV{ROS_DISTRO} STREQUAL "lyrical")
+    # No upstream RGL release for lyrical, and unlike kilted its rclcpp ABI diverged from jazzy's
+    # (a few functions started taking shared_ptr args by const-ref instead of by value), so the
+    # jazzy binary cannot be reused here. RGL must be built locally from source against lyrical.
+    set(RGL_USE_LOCAL_BUILD TRUE)
+    set(RGL_LOCAL_BUILD_DIR "${CMAKE_CURRENT_LIST_DIR}/3rdParty/rgl-lyrical-local-build" CACHE PATH
+            "Path to a locally built RobotecGPULidar (lib/libRobotecGPULidar.so and include/rgl/api/...) \
+used for ROS distros with no official RGL release.")
 else()
-    message(FATAL_ERROR "ROS not found or ROS distro not supported. Please use one of {humble, jazzy}.")
+    message(FATAL_ERROR "ROS not found or ROS distro not supported. Please use one of {humble, jazzy, kilted, lyrical}.")
 endif ()
 set(RGL_LINUX_ZIP_FILENAME ${RGL_LINUX_ZIP_FILENAME_BASE}.zip)
 
@@ -57,35 +67,49 @@ if (NOT EXISTS ${RGL_DOWNLOAD_IN_PROGRESS_FILE})
         file(READ ${ROS_DISTRO_METADATA_FILE} ROS_DISTRO_METADATA)
     endif ()
 
-    # If metadata does not match, download RGL
+    # If metadata does not match, (re)fetch RGL
     if ((NOT ${RGL_VERSION_METADATA} STREQUAL ${RGL_VERSION}) OR (NOT ${ROS_DISTRO_METADATA} STREQUAL ${ROS_DISTRO}))
-        message("Downloading RGL " ${RGL_VERSION} " for ROS " ${ROS_DISTRO} "...")
+        if (RGL_USE_LOCAL_BUILD)
+            if (NOT EXISTS ${RGL_LOCAL_BUILD_DIR}/lib/${SO_FILENAME})
+                message(FATAL_ERROR "RGL_USE_LOCAL_BUILD is set for ROS_DISTRO=${ROS_DISTRO}, but "
+                        "${RGL_LOCAL_BUILD_DIR}/lib/${SO_FILENAME} was not found. Build RobotecGPULidar from "
+                        "source against your sourced ROS2 environment (./setup.py --with-ros2, with "
+                        "OptiX_INSTALL_DIR set) and place lib/${SO_FILENAME} plus include/rgl/api/... under "
+                        "${RGL_LOCAL_BUILD_DIR}, or point RGL_LOCAL_BUILD_DIR at an existing build.")
+            endif ()
+            message("Using locally built RGL from " ${RGL_LOCAL_BUILD_DIR} " for ROS " ${ROS_DISTRO} "...")
 
-        # Download the RGL archive files
-        file(DOWNLOAD
-                ${RGL_LINUX_ZIP_URL}
-                ${DEST_SO_DIR}/${RGL_LINUX_ZIP_FILENAME}
-        )
+            file(COPY ${RGL_LOCAL_BUILD_DIR}/lib/${SO_FILENAME} DESTINATION ${DEST_SO_DIR})
+            file(COPY ${RGL_LOCAL_BUILD_DIR}/include/rgl DESTINATION ${DEST_SO_DIR}/include)
+        else ()
+            message("Downloading RGL " ${RGL_VERSION} " for ROS " ${ROS_DISTRO} "...")
 
-        # Extract the contents of the downloaded archive files
-        file(ARCHIVE_EXTRACT INPUT ${DEST_SO_DIR}/${RGL_LINUX_ZIP_FILENAME}
-                DESTINATION ${DEST_SO_DIR}
-                PATTERNS ${SO_FILENAME}
-                VERBOSE
-        )
+            # Download the RGL archive files
+            file(DOWNLOAD
+                    ${RGL_LINUX_ZIP_URL}
+                    ${DEST_SO_DIR}/${RGL_LINUX_ZIP_FILENAME}
+            )
 
-        # Remove the unwanted byproducts
-        file(REMOVE ${DEST_SO_DIR}/${RGL_LINUX_ZIP_FILENAME})
+            # Extract the contents of the downloaded archive files
+            file(ARCHIVE_EXTRACT INPUT ${DEST_SO_DIR}/${RGL_LINUX_ZIP_FILENAME}
+                    DESTINATION ${DEST_SO_DIR}
+                    PATTERNS ${SO_FILENAME}
+                    VERBOSE
+            )
 
-        # Download API headers
-        file(DOWNLOAD
-                ${RGL_SRC_ROOT_URL}/include/rgl/api/core.h
-                ${DEST_API_DIR}/core.h
-        )
-        file(DOWNLOAD
-                ${RGL_SRC_ROOT_URL}/extensions/ros2/include/rgl/api/extensions/ros2.h
-                ${DEST_API_DIR}/extensions/ros2.h
-        )
+            # Remove the unwanted byproducts
+            file(REMOVE ${DEST_SO_DIR}/${RGL_LINUX_ZIP_FILENAME})
+
+            # Download API headers
+            file(DOWNLOAD
+                    ${RGL_SRC_ROOT_URL}/include/rgl/api/core.h
+                    ${DEST_API_DIR}/core.h
+            )
+            file(DOWNLOAD
+                    ${RGL_SRC_ROOT_URL}/extensions/ros2/include/rgl/api/extensions/ros2.h
+                    ${DEST_API_DIR}/extensions/ros2.h
+            )
+        endif ()
 
         # Save current metadata
         file(WRITE ${RGL_VERSION_METADATA_FILE} ${RGL_VERSION})
